@@ -1,0 +1,4 @@
+(executable
+ (public_name furiganalize_epub_interactive)
+ (name main)
+ (libraries furiganalize_epub_interactive))
