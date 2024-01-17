@@ -19,7 +19,12 @@
  (name furiganalize_epub_interactive)
  (synopsis "Annotate EPUB books with furigana")
  (description "A rewrite of the original furiganalize-epub implementation in OCaml with some extra features")
- (depends ocaml dune)
+ (depends
+   ocaml dune
+   batteries
+   camlzip
+   markup
+ )
  (tags
   (topics "to describe" your project)))
 

@@ -1,4 +1,12 @@
+(env (dev (flags (:standard -warn-error -A))))
+
 (executable
- (public_name furiganalize_epub_interactive)
+ (public_name fei)
  (name main)
- (libraries furiganalize_epub_interactive))
+ (libraries
+   furiganalize_epub_interactive
+   batteries
+   camlzip
+   markup
+ )
+)
