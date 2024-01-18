@@ -9,4 +9,5 @@
    camlzip
    markup
  )
+ (preprocess (pps ppx_deriving.show))
 )

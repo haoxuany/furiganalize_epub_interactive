@@ -1,5 +1,6 @@
 open! Batteries
 module E = Epub
+module M = Mecab
 
 let () =
   let open BatOptParse in
