@@ -148,38 +148,74 @@ let fold_map_content
   =
   let output = Z.open_out output in
   let entries = Z.entries file in
-  let module SpineSet = Hashtbl.Make(String) in
-  let spineset = SpineSet.of_list (List.map (fun s -> (s, ())) spine) in
   let state = ref initial in
+
+  let entries =
+    List.map
+      (fun (entry : Z.entry) ->
+        (entry , 
+         let open BatPathGen.OfString in
+         entry.filename
+         |> of_string
+         |> normalize
+         |> to_string
+      ) )
+      entries
+  in
+  let other_files , spine_files =
+    let module SpineSet = Hashtbl.Make(String) in
+    let spineset = SpineSet.of_list (List.map (fun s -> (s, ())) spine) in
+    List.partition
+      (fun (_ , name) -> 
+        match SpineSet.find_option spineset name with
+        | None -> true
+        | Some () -> false)
+      entries
+  in
+  (* first copy over other files *)
+  let () =
+    List.iter
+      (fun (entry , _) ->
+        (* do a direct copy *)
+        (* TODO: this is jank, we're doing a full memory read here, optimize this *)
+        Z.add_entry
+          (Z.read_entry file entry)
+          output entry.filename
+      )
+      other_files
+  in
+  (* Then handle spine files by spine order *)
+  let spine_files =
+    List.map
+      (fun name ->
+        let (file , _) =
+          List.find (fun (_ , entry_name) -> String.equal name entry_name)
+            spine_files
+        in
+        file
+      )
+      spine
+  in
   let () =
     List.iter
       (fun (entry : Z.entry) ->
-        let name =
-          let open BatPathGen.OfString in
-          entry.filename
-          |> of_string
-          |> normalize
-          |> to_string
+        (* do a fold write *)
+        (* TODO: this is jank, we're doing a full memory read here, optimize this *)
+        let file = Z.read_entry file entry in
+        let content = M.parse_xml (M.string file) in
+        let content = M.signals content in
+        let queue : M.signal list ref = ref [] in
+        let pop () =
+          match !queue with
+          | [] -> None
+          | tok :: rest -> queue := rest; Some tok
         in
-        match SpineSet.find_option spineset name with
-        | Some () ->
-           (* do a fold write *)
-           (* TODO: this is jank, we're doing a full memory read here, optimize this *)
-           let entry = Z.read_entry file entry in
-           let content = M.parse_xml (M.string entry) in
-           let content = M.signals content in
-           let queue : M.signal list ref = ref [] in
-           let pop () =
-             match !queue with
-             | [] -> None
-             | tok :: rest -> queue := rest; Some tok
-           in
-           let stream =
-             M.stream
-               (fun () ->
-                 match pop () with
-                 | Some s -> Some s
-                 | None -> 
+        let stream =
+          M.stream
+            (fun () ->
+              match pop () with
+              | Some s -> Some s
+              | None -> 
                  let signal = M.next content in
                  match signal with
                  | None -> None
@@ -215,11 +251,11 @@ let fold_map_content
                               parse_ruby result
                          end
                       | Some (`Start_element _)
-                        (* this really isn't supposed to happen in html spec, we parse then delete *)
+(* this really isn't supposed to happen in html spec, we parse then delete *)
                         -> let result = parse_ruby result in
                            parse_ruby result
                       | Some (`Comment _) | Some (`Doctype _) | Some (`PI _) | Some (`Xml _)
-                      (* bizarre, just delete *)
+                                                                                    (* bizarre, just delete *)
                         -> parse_ruby result
                     in
                     let rec parse_until result =
@@ -234,7 +270,7 @@ let fold_map_content
                          let subtree = parse_until [] in
                          parse_until (Tag (name , attrs , subtree) :: result)
                       | Some (`Comment _) | Some (`Doctype _) | Some (`PI _) | Some (`Xml _)
-                      (* bizarre, just delete *)
+                                                                                    (* bizarre, just delete *)
                         -> parse_until result
                     in
                     let parsed = parse_until [] |> List.rev in
@@ -261,18 +297,12 @@ let fold_map_content
                     pop ()
                  (* Anything else we pass through *)
                  | Some _ -> (); signal
-               )
-           in
-           let result = M.write_xml (M.xhtml stream) in
-           let result = M.to_string result in
-           Z.add_entry result output name
-        | None ->
-           (* do a direct copy *)
-           (* TODO: this is jank, we're doing a full memory read here, optimize this *)
-           Z.add_entry
-             (Z.read_entry file entry)
-             output entry.filename
+            )
+        in
+        let result = M.write_xml (M.xhtml stream) in
+        let result = M.to_string result in
+        Z.add_entry result output entry.filename
       )
-      entries
+      spine_files
   in
   Z.close_out output
