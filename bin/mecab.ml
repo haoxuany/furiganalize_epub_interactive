@@ -1,7 +1,6 @@
 open! Batteries
 open! Unix
 module UC = BatUChar
-module Utf8 = BatUTF8
 
 type ty =
   | Doushi
@@ -9,8 +8,12 @@ type ty =
   | Other
 [@@deriving show]
 
+type unicode_string =
+  string [@printer Format.pp_print_string]
+    [@@deriving show]
+
 type seg =
-  { readings : (string * string option) list
+  { readings : (unicode_string * unicode_string option) list
   ; ty : ty
   } [@@deriving show]
 
@@ -28,8 +31,14 @@ let parse s =
        let result =
          match result with
          | hinshi :: hinshibunrui1 :: _hinshibunrui2 :: _hinshibunrui3
-           :: _katsuyougata :: _katsuyoukei :: genkei :: yomi :: hatsuon :: _
-           -> ( hinshi , hinshibunrui1 , genkei , yomi , hatsuon )
+           :: _katsuyougata :: _katsuyoukei :: genkei :: rest
+           ->
+            let yomi , hatsuon =
+              match rest with
+              | yomi :: hatsuon :: _ -> (Some yomi , Some hatsuon)
+              | _ -> (None , None)
+            in
+            ( hinshi , hinshibunrui1 , genkei , yomi , hatsuon )
          | _ -> failwith (Printf.sprintf "Invalid mecab output format: %s" result_s)
        in
        loop ((word , result) :: results)
@@ -51,33 +60,29 @@ let parse s =
         let readings =
           match yomi with
           (* no reading *)
-          | "*" 
-            (* exactly equal, probably for katakana *)
-            | _ when String.equal yomi word -> [ ( word , None ) ]
-          | _ ->
-             let rec rev_match word_index yomi_index =
-               match word_index , yomi_index with
-               | 0 , _ | _ , 0 -> 
+          | None | Some "*" -> [ ( word , None ) ]
+          (* exactly equal, probably for katakana *)
+          | Some yomi when String.equal yomi word -> [ ( word , None ) ]
+          | Some yomi ->
+             let rec rev_match rword ryomi leftover =
+               match rword, ryomi with
+               | [] , _ | _ , [] ->
                   (* in which case entire reading should just be directly trimmed *)
                   [ ( word , None ) ]
-               | _ ->
-                  let wordc = Utf8.get word (word_index - 1) |> hiraganalize in
-                  let yomic = Utf8.get yomi (yomi_index - 1) |> hiraganalize in
-                  if UC.eq wordc yomic
+               | ((a :: rword) as allrword) , ((b :: ryomi) as allryomi) ->
+                  if UC.eq (hiraganalize a) b
                   then
-                    rev_match (word_index - 1) (yomi_index - 1)
+                    rev_match rword ryomi (a :: leftover)
                   else
-                    let word_index = Utf8.nth word word_index
-                    and yomi_index = Utf8.nth yomi yomi_index
-                    in
-                    let preword = String.slice ~last:word_index word
-                    and preyomi = String.slice ~last:yomi_index yomi
-                    and postword = String.slice ~first:word_index word in
-                    [ ( preword , Some (Utf8.map hiraganalize preyomi) ) ;
-                      ( postword , None )
+                    [ ( Utf8.implode (List.rev allrword) ,
+                        Some (Utf8.implode (List.rev allryomi)) ) ;
+                      ( Utf8.implode leftover , None )
                     ]
              in
-             rev_match (Utf8.length word) (Utf8.length yomi)
+             rev_match
+               (List.rev (Utf8.explode word))
+               (List.rev (List.map hiraganalize (Utf8.explode yomi)))
+               []
         in
         let ty =
           match hinshi with
