@@ -235,9 +235,11 @@ let fold_map_content
                       | None -> result
                       | Some `End_element -> result
                       | Some `Text s -> parse_ruby (Text (String.concat "" s) :: result)
-                      | Some (`Start_element ((_, "rt") , _))
-                        | Some (`Start_element ((_, "rb") , _))
-                        ->
+                      | Some (`Start_element ((_, "rb") , _)) ->
+                         (* bizarrely some books use the rb tag for the regular bottom text (ex. Danganronpa Kirigiri 1) *)
+                         let result = parse_ruby result in
+                         parse_ruby result
+                      | Some (`Start_element ((_, "rt") , _)) ->
                          begin
                            match parse_text None with
                            | None -> parse_ruby result
