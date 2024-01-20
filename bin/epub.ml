@@ -140,6 +140,17 @@ type content =
   (* realistically probably some CSS class *)
   | Tag of M.name * (M.name * string) list * content list
 
+let show_plain_content (c : content list) =
+  let rec show c result =
+    match c with
+    | (Text s) :: rest -> show rest (s :: result)
+    | (Annotate (a , b)) :: rest ->
+       show rest ((String.concat "" [a ; "(" ; b ; ")"]) :: result)
+    | (Tag (_ , _ , children)) :: rest ->
+       show (children @ rest) result
+    | [] -> String.concat "" (List.rev result)
+  in show c []
+
 let fold_map_content
       (output : string)
       (f : 'a -> content list -> content list * 'a)
