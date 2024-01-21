@@ -88,13 +88,53 @@ let () =
           v (Printexc.to_string exn)
       )
   in
+  let dicopt =
+    Opt.value_option
+      "DICTIONARY_PATH"
+      (Some None)
+      (fun s ->
+        File.with_file_in s
+          ~mode:File.[ `create ]
+          ~perm:(File.unix_perm 0o644)
+          (fun input -> 
+           let data =
+             IO.read_all input
+             |> String.split_on_char '\n'
+             |> List.filter_map
+                  (fun s ->
+                    let s = String.trim s in
+                    let open Int in
+                    if String.length s == 0
+                    then None
+                    else Some s)
+             |> List.map A.of_string
+           in Some (s , data)
+      ))
+      (fun exn v ->
+        Printf.sprintf
+          "Cannot open file '%s': %s"
+          v (Printexc.to_string exn)
+      )
+  in
   let () =
     P.add parser ~help:"Path to epub file" ~long_name:"path" pathopt;
+    P.add parser ~help:"Path to local dictionary file" ~long_name:"local" dicopt;
     ()
   in
   let _ = P.parse_argv parser in
   let file = Opt.get pathopt in
-  let state = { last_line = None ; dictionary = [] } in
+  let dictionary , push_write_entry =
+    match Opt.get dicopt with
+    | None -> [] , fun _ -> ()
+    | Some (dicfile , dic) ->
+       dic ,
+       fun entry ->
+       File.with_file_out
+         ~mode:File.[ `append ]
+         dicfile
+         (fun out -> IO.write_line out (A.to_string entry))
+  in
+  let state = { last_line = None ; dictionary } in
   let () =
     E.fold_map_content
       "output.epub"
@@ -124,6 +164,10 @@ let () =
         let parsed = M.parse text in
 
         let dictionary = ref state.dictionary in
+        let push_entry entry =
+          dictionary := entry :: !dictionary;
+          push_write_entry entry
+        in
 
         (* rewriting the stored term into the tree *)
         let rewrite_annotate word (content : E.content list) =
@@ -207,9 +251,10 @@ let () =
                match c with
                | [] | (Text _) :: _ | (Tag _) :: _ ->
                   ( annots
-                  |> List.rev
-                  |> List.map (fun (a , b) -> (a , Some b))
-                  |> A.of_segs , c)
+                    |> List.rev
+                    |> List.map (fun (a , b) -> (a , Some b))
+                    |> A.of_segs
+                  , c)
                | (Annotate (a , b)) :: rest -> collect_annot rest ((a , b) :: annots) 
              in
              let annot , rest = collect_annot rest [(a , b)] in
@@ -275,40 +320,26 @@ let () =
                else
                (* otherwise we prompt for reading conflict *)
                let response = prompt annot mecab_reading in
+               let write_dict_and_parse dic annot =
+                  let rest =
+                    if dic
+                    then
+                      begin
+                        push_entry annot;
+                        let rest = rewrite_annotate annot rest in
+                        rest
+                      end
+                    else rest
+                  in
+                  inject rest parsing (use_annotate annot)
+               in
                match response with
                | Keep dic ->
-                  let rest =
-                    if dic
-                    then
-                      let d = annot in
-                      dictionary := d :: !dictionary;
-                      let rest = rewrite_annotate d rest in
-                      rest
-                    else rest
-                  in
-                  inject rest parsing (use_annotate annot)
+                  write_dict_and_parse dic annot
                | Mecab dic ->
-                  let rest =
-                    if dic
-                    then
-                      let d = mecab_reading in
-                      dictionary := d :: !dictionary;
-                      let rest = rewrite_annotate d rest in
-                      rest
-                    else rest
-                  in
-                  inject rest parsing (use_annotate mecab_reading)
+                  write_dict_and_parse dic mecab_reading
                | Custom (dic , annot) ->
-                  let rest =
-                    if dic
-                    then
-                      let d = annot in
-                      dictionary := d :: !dictionary;
-                      let rest = rewrite_annotate d rest in
-                      rest
-                    else rest
-                  in
-                  inject rest parsing (use_annotate annot)
+                  write_dict_and_parse dic annot
         in
         let (result , _) = inject content parsed [] in
         let state =
