@@ -120,6 +120,29 @@ let () =
   let outopt =
     StdOpt.str_option ~metavar:"OUTPUT" ()
   in
+  let splitteropt =
+    let open FS in
+    Opt.value_option
+      "SPLITTER"
+      begin
+        Some (module NaiveSplit : SPLIT)
+      end
+      begin
+        fun s ->
+        let module M =
+          PickBest(
+              JmdictFuriganaSplit(struct let filename = s end)
+            )
+            (NaiveSplit)
+        in
+        (module M : SPLIT)
+      end
+      (fun exn v ->
+        Printf.sprintf
+          "Error for '%s': %s"
+          v (Printexc.to_string exn)
+      )
+  in
   let () =
     P.add parser ~help:"Path to epub file"
       ~short_names:['i']
@@ -133,10 +156,16 @@ let () =
       ~short_names:['o']
       ~long_names:["output" ; "out"]
       outopt;
+    P.add parser ~help:"Path JmdictFurigana json file"
+      ~short_names:['f']
+      ~long_names:["furigana"]
+      splitteropt;
     ()
   in
   let _ = P.parse_argv parser in
   let file = Opt.get pathopt in
+  let module FS = (val (Opt.get splitteropt) : FS.SPLIT) in
+  let splitter = FS.init () in
   let dictionary , push_write_entry =
     match Opt.get dicopt with
     | None -> [] , fun _ -> ()
@@ -148,38 +177,51 @@ let () =
          dicfile
          (fun out -> IO.write_line out (A.to_string entry))
   in
-  let module S = FS.JmdictFuriganaSplit(struct let filename = "test.json" end) in
-  let t = S.init () in
-  let result = S.split t ~jishokei:"基本" ~base:"基本" ~reading:"きほん" in
-  let () = print_endline (A.show_word result) in
   let state = { last_line = None ; dictionary } in
   let () =
     E.fold_map_content
       (Opt.get outopt)
       (fun state content ->
-        let context =
-          begin
-          match state.last_line with
-          | None -> [ content ]
-          | Some l -> [ l ; content ]
-          end
-          |> List.map E.show_plain_content
+        let prompt =
+          let context =
+            begin
+              match state.last_line with
+              | None -> [ content ]
+              | Some l -> [ l ; content ]
+            end
+            |> List.map E.show_plain_content
+          in
+          prompt_annotation context
         in
-        let prompt = prompt_annotation context in
 
-        let rec strip (c : E.content) =
-          match c with
-          | Text s -> s
-          | Annotate (s , _) -> s
-          | Tag (_ , _ , children) ->
-             List.map strip children
-             |> String.concat ""
-        in
-        let text =
-          List.map strip content
-          |> String.concat ""
-        in
-        let parsed = M.parse text in
+        let parse_mecab content =
+          let rec strip (c : E.content) =
+            match c with
+            | Text s -> s
+            | Annotate (s , _) -> s
+            | Tag (_ , _ , children) ->
+               List.map strip children
+               |> String.concat ""
+          in
+          let text =
+            List.map strip content
+            |> String.concat ""
+          in
+          let parsed = M.parse text in
+          let parsed =
+            List.map
+              (fun ({ word ; reading ; jishokei ; _ } : M.seg) ->
+                match reading with
+                | None -> A.of_segs [ (word , None) ]
+                | Some reading ->
+                   FS.split splitter ~jishokei ~base:word ~reading
+              )
+              parsed
+          in
+          parsed
+       in
+
+       let parsed = parse_mecab content in
 
         let dictionary = ref state.dictionary in
         let push_entry entry =
@@ -227,9 +269,10 @@ let () =
             (fun content annot -> rewrite_annotate annot content)
             content (!dictionary)
         in
+
         (* let () = print_endline ([%show: E.content list] content) in *)
         (* inject mecab *)
-        let rec inject content (parsing : M.seg list) result =
+        let rec inject content (parsing : A.word list) result =
           match content , parsing with
           | [] , parsing -> (List.rev result , parsing)
           | content , [] ->
@@ -238,9 +281,9 @@ let () =
           | (E.Tag (name , attrs , content)) :: rest , parsing ->
              let (children , parsing) = inject content parsing [] in
              inject rest parsing (E.Tag (name , attrs , children) :: result)
-          | content , { readings = [] ; _ } :: parsing ->
+          | content , { segs = [] ; _ } :: parsing ->
              inject content parsing result
-          | (Text s) :: rest , (({ readings = (word , reading) :: readingrest ; ty } :: parsing) as allparsing) ->
+          | (Text s) :: rest , (({ segs = (word , reading) :: readingrest ; _ } :: parsing) as allparsing) ->
              begin
                match Utf8.explode s with
                (* Case 1: too late to match, look at next token *)
@@ -248,7 +291,9 @@ let () =
                (* Case 2: segment matches *)
                | _ when String.starts_with_stdlib ~prefix:word s ->
                   let srest = String.slice ~first:(String.length word) s in
-                  inject ((Text srest) :: rest) ({ readings = readingrest ; ty } :: parsing)
+                  inject
+                    ((Text srest) :: rest)
+                    ((A.of_segs readingrest) :: parsing)
                     begin
                       (match reading with
                        | None -> Text word
@@ -260,10 +305,15 @@ let () =
                | _ when String.starts_with_stdlib ~prefix:s word ->
                   (* TODO: we junk both for time being, perhaps think of a better way of handling this or
                      figure out scenarios when this happens *)
-                  inject rest ({ readings = readingrest ; ty } :: parsing) ((Text s) :: result)
+                  inject rest
+                    ((A.of_segs readingrest) :: parsing)
+                    ((Text s) :: result)
                (* Case 4: segment doesn't match, in which case we dump a character and look further ahead *)
                | c :: srest ->
-                  inject ((Text (Utf8.implode srest)) :: rest) allparsing ((Text (Utf8.of_char c)) :: result)
+                  inject
+                    ((Text (Utf8.implode srest)) :: rest)
+                    allparsing
+                    ((Text (Utf8.of_char c)) :: result)
              end
           | (Annotate (a, b)) :: rest , parsing ->
              let rec collect_annot (c : E.content list) annots =
@@ -282,52 +332,47 @@ let () =
                 There are bizarre cases where it is not a single word and then its much more complicated. *)
              let annot_base = A.base annot
              and annot_reading = A.annot annot in
-             (* print_endline ([%show: M.seg list] parsing); *)
              (* print_endline (A.show_word annot); *)
              (* TODO: optimize this with substrings *)
-             let rec collect_mecab_reading (parsing : M.seg list) base
-                     : (string * string option) list * M.seg list =
+             let rec collect_mecab_reading (parsing : A.word list) base
+                     : (string * string option) list * A.word list =
                match String.length base with
                | 0 -> ([] , parsing)
                | _ ->
                   begin
                     match parsing with
-                    | ({ readings = [] ; _ } :: parsing) ->
+                    | ({ segs = [] ; _ } :: parsing) ->
                        collect_mecab_reading parsing base
-                    | ({ readings = (word , reading) :: readingrest ; ty } :: parsing) ->
+                    | ({ segs = (word , reading) :: readingrest ; _ } :: parsing) ->
                        if String.starts_with_stdlib ~prefix:word base (* partial matches *)
                        then
                          let (matches , parsing) =
-                           collect_mecab_reading ({ readings = readingrest ; ty } :: parsing)
+                           collect_mecab_reading ((A.of_segs readingrest) :: parsing)
                              (String.slice ~first:(String.length word) base)
                          in
                          ((word , reading) :: matches , parsing)
                        else
                          if String.starts_with_stdlib ~prefix:base word (* match overflows *)
                          then
-                           ([(word , reading)] , { readings = readingrest ; ty } :: parsing )
+                           ([(word , reading)] , (A.of_segs readingrest) :: parsing )
                          else
                            (* mismatch otherwise, this is just really bad and likely a bug within mecab itself *)
                            (* try and junk and then pray *)
-                           ([(word , reading)] , { readings = readingrest ; ty } :: parsing )
+                           ([(word , reading)] , (A.of_segs readingrest) :: parsing )
                     | [] -> ([] , [])
                   end
              in
              let mecab_reading , parsing = collect_mecab_reading parsing annot_base in
              (* we do a extremely stupid match here, if it doesn't work, we say screw it and then prompt *)
-             let mecab_reading_s =
-               mecab_reading
-               |> List.map (fun (_ , reading) -> match reading with None -> "?" | Some s -> s)
-               |> String.concat ""
-             in
              let mecab_reading = A.of_segs mecab_reading in
+             let mecab_reading_s = A.annot mecab_reading in
              let map_annot (a , b) =
                match b with
                | None -> E.Text a
                | Some b -> Annotate (a , b)
              in
              let use_annotate annots =
-               (List.map map_annot (List.rev (A.segs annots))) @ result
+               (List.rev (List.map map_annot (A.segs annots))) @ result
              in
              if String.starts_with_stdlib ~prefix:annot_reading mecab_reading_s
              then (* we're actually good here, just use annotations as is *)

@@ -13,7 +13,9 @@ type unicode_string =
     [@@deriving show]
 
 type seg =
-  { readings : (unicode_string * unicode_string option) list
+  { word : unicode_string
+  ; reading : unicode_string option
+  ; jishokei : unicode_string
   ; ty : ty
   } [@@deriving show]
 
@@ -44,58 +46,21 @@ let parse s =
        loop ((word , result) :: results)
   in
   let results = List.rev (loop []) in
-  let hiraganalize (c : UC.t) =
-    let code = UC.code c in
-    let open Int in
-    let code =
-      (* Katakana range: U+30A1 - U+30F6 *)
-      if code >= 12449 && code <= 12534
-      then code - 96 (* Hiragana range: U+3041 - U+3096 *)
-      else code
-    in UC.chr code
-  in
   let results =
     List.map
-      (fun (word , ( hinshi , _ , _ , yomi , _ )) -> 
-        let readings =
+      (fun (word , ( hinshi , _ , genkei , yomi , _ )) -> 
+        let reading =
           match yomi with
-          (* no reading *)
-          | None | Some "*" -> [ ( word , None ) ]
-          (* exactly equal, probably for katakana *)
-          | Some yomi when String.equal yomi word -> [ ( word , None ) ]
-          | Some yomi ->
-             let rec rev_match rword ryomi leftover =
-               match rword, ryomi with
-               | [] , _ | _ , [] ->
-                  (* in which case entire reading should just be directly trimmed *)
-                  [ ( word , None ) ]
-               | ((a :: rword) as allrword) , ((b :: ryomi) as allryomi) ->
-                  if UC.eq (hiraganalize a) b
-                  then
-                    rev_match rword ryomi (a :: leftover)
-                  else
-                    let head = 
-                      ( Utf8.implode (List.rev allrword) ,
-                        Some (Utf8.implode (List.rev allryomi)) )
-                    in
-                    match leftover with
-                    | [] -> [ head ]
-                    | _ -> 
-                       [ head ;
-                         ( Utf8.implode leftover , None )
-                       ]
-             in
-             rev_match
-               (List.rev (Utf8.explode word))
-               (List.rev (List.map hiraganalize (Utf8.explode yomi)))
-               []
+          | None | Some "*" -> None
+          | Some s -> Some s
         in
+        let jishokei = genkei in
         let ty =
           match hinshi with
           | "動詞" -> Doushi
           | "助動詞" -> Joudoushi
           | _ -> Other
-        in { readings ; ty }
+        in { word ; reading ; jishokei ; ty }
       )
       results
   in
