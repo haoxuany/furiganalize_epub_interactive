@@ -2,6 +2,7 @@ open! Batteries
 module E = Epub
 module M = Mecab
 module A = Annot
+module FS = Furigana_split
 
 let prompt_line s =
   let open BatIO in
@@ -147,6 +148,10 @@ let () =
          dicfile
          (fun out -> IO.write_line out (A.to_string entry))
   in
+  let module S = FS.JmdictFuriganaSplit(struct let filename = "test.json" end) in
+  let t = S.init () in
+  let result = S.split t ~jishokei:"基本" ~base:"基本" ~reading:"きほん" in
+  let () = print_endline (A.show_word result) in
   let state = { last_line = None ; dictionary } in
   let () =
     E.fold_map_content
