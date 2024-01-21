@@ -1,6 +1,7 @@
 open! Batteries
 module E = Epub
 module M = Mecab
+module A = Annot
 
 let prompt_line s =
   let open BatIO in
@@ -12,6 +13,7 @@ let prompt_line s =
 type prompt_response =
   | Keep of bool
   | Mecab of bool
+  | Custom of bool * A.word
 
 let prompt_annotation lines annots mecab =
   let rec loop () =
@@ -25,21 +27,10 @@ let prompt_annotation lines annots mecab =
                    "" ;
                    String.concat ""
                      ["What do you do with " ;
-                      String.concat ""
-                        (List.map (fun (base, annot) ->
-                             String.concat "" ["[" ; base ; "]" ; "(" ; annot ; ")"])
-                           annots) ;
+                      A.to_string annots ;
                       "? " ;
                       "Mecab Reference: ";
-                      String.concat ""
-                        (List.map
-                           (fun (base, annot) ->
-                             match annot with
-                             | None -> base
-                             | Some s ->
-                                String.concat ""
-                                  ["[" ; base ; "]" ; "(" ; s ; ")"])
-                           mecab) ;
+                      A.to_string mecab ;
                      ] ;
                    "[ (k)eep orignal / (kd) keep in dictionary and propagate / defaults to keep ]" ;
                    "[ (m) use mecab / (md) use mecab in dictionary / provide your own correction otherwise ]" ;
@@ -51,15 +42,30 @@ let prompt_annotation lines annots mecab =
     | "kd" -> Keep true
     | "m" -> Mecab false
     | "md" -> Mecab true
-    | _ -> BatIO.write_line stdout "Unknown option"; loop ()
+    | s ->
+       let word = A.of_string s in
+       let rec promptdict () =
+         match
+           prompt_line
+             [ "Propagate to dictionary?" ;
+               "[ (y)es / (n)o / (b)ackout to retype / default to yes ]" ;
+             ]
+         with
+         | "y" | "" -> Custom (true , word)
+         | "n" -> Custom (false , word)
+         | "b" -> loop ()
+         | _ ->
+            BatIO.write_line stdout "Unknown option";
+            BatIO.flush stdout;
+            promptdict ()
+       in promptdict ()
   in
   loop ()
 
-type word = (string * string option) list
 type state =
   { last_line : E.content list option
   (* TODO : think about the right data structure here, probably trie *)
-  ; dictionary : (string * word) list
+  ; dictionary : A.word list
   }
 
 let () =
@@ -120,7 +126,8 @@ let () =
         let dictionary = ref state.dictionary in
 
         (* rewriting the stored term into the tree *)
-        let rewrite_annotate (annot_base , annot) (content : E.content list) =
+        let rewrite_annotate word (content : E.content list) =
+          let annot_base = A.base word in
           let annot_len = String.length annot_base in
           let rec rewrite (content : E.content) : E.content list =
             match content with
@@ -142,7 +149,7 @@ let () =
                               match b with
                               | None -> E.Text a
                               | Some b -> Annotate (a , b)
-                            ) annot) @
+                            ) (A.segs word)) @
                        (split after term rest)
                in
                split s 0 positions
@@ -198,16 +205,19 @@ let () =
           | (Annotate (a, b)) :: rest , parsing ->
              let rec collect_annot (c : E.content list) annots =
                match c with
-               | [] | (Text _) :: _ | (Tag _) :: _ -> (List.rev annots , c)
+               | [] | (Text _) :: _ | (Tag _) :: _ ->
+                  ( annots
+                  |> List.rev
+                  |> List.map (fun (a , b) -> (a , Some b))
+                  |> A.of_segs , c)
                | (Annotate (a , b)) :: rest -> collect_annot rest ((a , b) :: annots) 
              in
-             let annots , rest = collect_annot rest [(a , b)] in
+             let annot , rest = collect_annot rest [(a , b)] in
              (* There are a whole bunch of crazy cases that can theoretically happen and this depends on how accurate mecab is *)
              (* Overall strategy: we consider the book as the source of truth and that to be a single word.
                 There are bizarre cases where it is not a single word and then its much more complicated. *)
-             let annot_base, annot_reading = List.split annots in
-             let annot_base = String.concat "" annot_base
-             and annot_reading = String.concat "" annot_reading in
+             let annot_base = A.base annot
+             and annot_reading = A.annot annot in
              (* print_endline ([%show: M.seg list] parsing); *)
              (* TODO: optimize this with substrings *)
              let rec collect_mecab_reading (parsing : M.seg list) base
@@ -245,52 +255,60 @@ let () =
                |> List.map (fun (_ , reading) -> match reading with None -> "?" | Some s -> s)
                |> String.concat ""
              in
-             let use_annotate () =
-               (List.map (fun (a, b) -> E.Annotate (a, b)) annots) @ result
+             let mecab_reading = A.of_segs mecab_reading in
+             let map_annot (a , b) =
+               match b with
+               | None -> E.Text a
+               | Some b -> Annotate (a , b)
              in
-             let use_mecab () =
-               (List.map
-                  (fun (a , b) ->
-                    match b with
-                    | None -> E.Text a
-                    | Some b -> Annotate (a , b))
-                  mecab_reading) @ result
+             let use_annotate annots =
+               (List.map map_annot (A.segs annots)) @ result
              in
              if String.starts_with_stdlib ~prefix:annot_reading mecab_reading_s
              then (* we're actually good here, just use annotations as is *)
-               inject rest parsing (use_annotate ())
+               inject rest parsing (use_annotate annot)
              else
                (* if its already in the dictionary, we just skip, even if the annotation is different *)
-               if List.exists (fun (s , _) -> String.equal annot_base s) !dictionary
+               if List.exists (fun word -> String.equal annot_base (A.base word)) !dictionary
                then
-                 inject rest parsing (use_annotate ())
+                 inject rest parsing (use_annotate mecab_reading)
                else
                (* otherwise we prompt for reading conflict *)
-               let response = prompt annots mecab_reading in
+               let response = prompt annot mecab_reading in
                match response with
                | Keep dic ->
                   let rest =
                     if dic
                     then
-                      let annots = List.map (fun (a , b) -> (a , Some b)) annots in
-                      let d = (annot_base , annots) in
+                      let d = annot in
                       dictionary := d :: !dictionary;
                       let rest = rewrite_annotate d rest in
                       rest
                     else rest
                   in
-                  inject rest parsing (use_annotate ())
+                  inject rest parsing (use_annotate annot)
                | Mecab dic ->
                   let rest =
                     if dic
                     then
-                      let d = (mecab_reading_s , mecab_reading) in
+                      let d = mecab_reading in
                       dictionary := d :: !dictionary;
                       let rest = rewrite_annotate d rest in
                       rest
                     else rest
                   in
-                  inject rest parsing (use_mecab ())
+                  inject rest parsing (use_annotate mecab_reading)
+               | Custom (dic , annot) ->
+                  let rest =
+                    if dic
+                    then
+                      let d = annot in
+                      dictionary := d :: !dictionary;
+                      let rest = rewrite_annotate d rest in
+                      rest
+                    else rest
+                  in
+                  inject rest parsing (use_annotate annot)
         in
         let (result , _) = inject content parsed [] in
         let state =
