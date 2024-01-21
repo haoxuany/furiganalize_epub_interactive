@@ -124,6 +124,7 @@ let parse filename file =
         | Some s -> relpath s
       )
       xhtml_order
+    |> List.rev
   in
   { filename ; file ; spine }
 

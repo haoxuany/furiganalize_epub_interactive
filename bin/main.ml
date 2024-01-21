@@ -209,7 +209,8 @@ let () =
                             ) (A.segs word)) @
                        (split after term rest)
                in
-               split s 0 positions
+               let result = split s 0 positions in
+               result
             | Annotate _ -> [ content ]
             | Tag (a , b , children) ->
                [ Tag (a , b , List.concat_map rewrite children) ]
@@ -277,6 +278,7 @@ let () =
              let annot_base = A.base annot
              and annot_reading = A.annot annot in
              (* print_endline ([%show: M.seg list] parsing); *)
+             (* print_endline (A.show_word annot); *)
              (* TODO: optimize this with substrings *)
              let rec collect_mecab_reading (parsing : M.seg list) base
                      : (string * string option) list * M.seg list =
@@ -320,7 +322,7 @@ let () =
                | Some b -> Annotate (a , b)
              in
              let use_annotate annots =
-               (List.map map_annot (A.segs annots)) @ result
+               (List.map map_annot (List.rev (A.segs annots))) @ result
              in
              if String.starts_with_stdlib ~prefix:annot_reading mecab_reading_s
              then (* we're actually good here, just use annotations as is *)
@@ -329,7 +331,7 @@ let () =
                (* if its already in the dictionary, we just skip, even if the annotation is different *)
                if List.exists (fun word -> String.equal annot_base (A.base word)) !dictionary
                then
-                 inject rest parsing (use_annotate mecab_reading)
+                 inject rest parsing (use_annotate annot)
                else
                (* otherwise we prompt for reading conflict *)
                let response = prompt annot mecab_reading in
@@ -355,6 +357,7 @@ let () =
                   write_dict_and_parse dic annot
         in
         let (result , _) = inject content parsed [] in
+        (* let () = print_endline ([%show: E.content list] result) in *)
         let state =
           { state with
             last_line = Some content ;

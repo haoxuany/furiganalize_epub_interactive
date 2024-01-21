@@ -12,10 +12,14 @@ let from_cache (a : 'a cached) (f : unit -> 'a) =
      result
   | Some s -> s
 
+type unicode_string =
+  string [@printer Format.pp_print_string]
+    [@@deriving show]
+
 type word =
-  { segs : (string * string option) list
-  ; base : string cached
-  ; annot : string cached
+  { segs : (unicode_string * unicode_string option) list
+  ; base : unicode_string cached
+  ; annot : unicode_string cached
   }
     [@@deriving show]
 
