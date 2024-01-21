@@ -1,19 +1,6 @@
 open! Batteries
 module UC = BatUChar
-
-(* Katakana range: U+30A1 - U+30F6 *)
-let katakana_range code = code >= 12449 && code <= 12534
-(* Hiragana range: U+3041 - U+3096 *)
-let hiragana_range code = code >= 12353 && code <= 12438
-
-let hiraganalize (c : UC.t) =
-  let code = UC.code c in
-  let open Int in
-  let code =
-    if katakana_range code
-    then code - 96
-    else code
-  in UC.chr code
+open Kana
 
 module type SPLIT = sig
   type t
@@ -31,8 +18,8 @@ module RefuseBasicAnnotation (S : SPLIT) : SPLIT = struct
            let code = UC.code c in
            let open Int in
            List.exists (fun f -> f code)
-             [ katakana_range
-             ; hiragana_range
+             [ code_katakana_range
+             ; code_hiragana_range
              ]
          )
          (Utf8.explode base)

@@ -13,4 +13,3 @@ let explode (s : t) : BatUChar.t list =
 let implode (l : BatUChar.t list) : t =
   let l = List.map of_char l in
   String.concat "" l
-  

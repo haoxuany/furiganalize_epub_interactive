@@ -52,7 +52,12 @@ let parse s =
         let reading =
           match yomi with
           | None | Some "*" -> None
-          | Some s -> Some s
+          | Some s ->
+             s
+             |> Utf8.explode
+             |> List.map Kana.hiraganalize
+             |> Utf8.implode
+             |> fun s -> Some s
         in
         let jishokei = genkei in
         let ty =
