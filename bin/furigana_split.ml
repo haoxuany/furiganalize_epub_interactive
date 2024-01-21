@@ -20,9 +20,16 @@ module RefuseBasicAnnotation (S : SPLIT) : SPLIT = struct
            List.exists (fun f -> f code)
              [ code_katakana_range
              ; code_hiragana_range
+             ; code_halfwidth_punctuation_range
+             ; code_punctuation_range
+             ; code_fullwidth_range
+             ; code_misc_range
              ]
          )
          (Utf8.explode base)
+       (* fallback: in case these ranges don't cover everything in a book (they don't)
+          we try to do a hard string comparison to see if its extraneous *)
+     || (String.equal base reading)
     then Annot.of_segs [ (base , None) ]
     else split t ~jishokei ~base ~reading
 end
