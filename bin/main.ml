@@ -116,9 +116,22 @@ let () =
           v (Printexc.to_string exn)
       )
   in
+  let outopt =
+    StdOpt.str_option ~metavar:"OUTPUT" ()
+  in
   let () =
-    P.add parser ~help:"Path to epub file" ~long_name:"path" pathopt;
-    P.add parser ~help:"Path to local dictionary file" ~long_name:"local" dicopt;
+    P.add parser ~help:"Path to epub file"
+      ~short_names:['i']
+      ~long_names:["path" ; "input" ; "in"]
+      pathopt;
+    P.add parser ~help:"Path to local dictionary file"
+      ~short_names:['d']
+      ~long_name:"local"
+      dicopt;
+    P.add parser ~help:"Path to output file"
+      ~short_names:['o']
+      ~long_names:["output" ; "out"]
+      outopt;
     ()
   in
   let _ = P.parse_argv parser in
@@ -137,7 +150,7 @@ let () =
   let state = { last_line = None ; dictionary } in
   let () =
     E.fold_map_content
-      "output.epub"
+      (Opt.get outopt)
       (fun state content ->
         let context =
           begin

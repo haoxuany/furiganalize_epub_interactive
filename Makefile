@@ -1,9 +1,9 @@
 
 watch:
-	dune exec fei -w -- --path=../test.epub --local=local.dic
+	dune exec fei -w -- -i ../test.epub -o output.epub -d local.dic
 
 run:
-	dune exec fei -- --path=../test.epub --local=local.dic
+	dune exec fei -- -i ../test.epub -o output.epub -d local.dic
 
 build:
 	dune build -w
