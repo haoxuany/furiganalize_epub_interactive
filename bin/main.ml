@@ -10,7 +10,8 @@ let prompt_line s =
   String.trim s
 
 type prompt_response =
-  | Keep
+  | Keep of bool
+  | Mecab of bool
 
 let prompt_annotation lines annots mecab =
   let rec loop () =
@@ -26,28 +27,39 @@ let prompt_annotation lines annots mecab =
                      ["What do you do with " ;
                       String.concat ""
                         (List.map (fun (base, annot) ->
-                             String.concat "" [base ; "(" ; annot ; ")"])
+                             String.concat "" ["[" ; base ; "]" ; "(" ; annot ; ")"])
                            annots) ;
                       "? " ;
                       "Mecab Reference: ";
                       String.concat ""
                         (List.map
                            (fun (base, annot) ->
-                             String.concat ""
-                               [base ; "(" ; (match annot with None -> "?" | Some s -> s) ; ")"])
+                             match annot with
+                             | None -> base
+                             | Some s ->
+                                String.concat ""
+                                  ["[" ; base ; "]" ; "(" ; s ; ")"])
                            mecab) ;
-                     ]
+                     ] ;
+                   "[ (k)eep orignal / (kd) keep in dictionary and propagate / defaults to keep ]" ;
+                   "[ (m) use mecab / (md) use mecab in dictionary / provide your own correction otherwise ]" ;
                  ]
               )
         end
     with
-    | "k" -> Keep
+    | "k" | "" -> Keep false
+    | "kd" -> Keep true
+    | "m" -> Mecab false
+    | "md" -> Mecab true
     | _ -> BatIO.write_line stdout "Unknown option"; loop ()
   in
   loop ()
 
+type word = (string * string option) list
 type state =
-  { last_line : E.content list option;
+  { last_line : E.content list option
+  (* TODO : think about the right data structure here, probably trie *)
+  ; dictionary : (string * word) list
   }
 
 let () =
@@ -76,7 +88,7 @@ let () =
   in
   let _ = P.parse_argv parser in
   let file = Opt.get pathopt in
-  let state = { last_line = None } in
+  let state = { last_line = None ; dictionary = [] } in
   let () =
     E.fold_map_content
       "output.epub"
@@ -105,6 +117,48 @@ let () =
         in
         let parsed = M.parse text in
 
+        let dictionary = ref state.dictionary in
+
+        (* rewriting the stored term into the tree *)
+        let rewrite_annotate (annot_base , annot) (content : E.content list) =
+          let annot_len = String.length annot_base in
+          let rec rewrite (content : E.content) : E.content list =
+            match content with
+            | Text s ->
+               let positions = String.find_all s annot_base |> List.of_enum in
+               let rec split s i positions =
+                 match positions with
+                 | [] -> [ E.Text s ]
+                 | pos :: rest ->
+                    if pos < i then
+                      split s i rest
+                    else
+                      let before = String.slice ~last:(pos - i) s  in
+                      let term = (pos - i) + annot_len in
+                      let after = String.slice ~first:term s in
+                      (E.Text before)
+                      :: (List.map
+                            (fun (a , b) ->
+                              match b with
+                              | None -> E.Text a
+                              | Some b -> Annotate (a , b)
+                            ) annot) @
+                       (split after term rest)
+               in
+               split s 0 positions
+            | Annotate _ -> [ content ]
+            | Tag (a , b , children) ->
+               [ Tag (a , b , List.concat_map rewrite children) ]
+          in List.concat_map rewrite content
+        in
+
+        let content =
+          List.fold_left
+            (fun content annot -> rewrite_annotate annot content)
+            content (!dictionary)
+        in
+        (* let () = print_endline ([%show: E.content list] content) in *)
+        (* inject mecab *)
         let rec inject content (parsing : M.seg list) result =
           match content , parsing with
           | [] , parsing -> (List.rev result , parsing)
@@ -154,6 +208,7 @@ let () =
              let annot_base, annot_reading = List.split annots in
              let annot_base = String.concat "" annot_base
              and annot_reading = String.concat "" annot_reading in
+             (* print_endline ([%show: M.seg list] parsing); *)
              (* TODO: optimize this with substrings *)
              let rec collect_mecab_reading (parsing : M.seg list) base
                      : (string * string option) list * M.seg list =
@@ -190,20 +245,60 @@ let () =
                |> List.map (fun (_ , reading) -> match reading with None -> "?" | Some s -> s)
                |> String.concat ""
              in
+             let use_annotate () =
+               (List.map (fun (a, b) -> E.Annotate (a, b)) annots) @ result
+             in
+             let use_mecab () =
+               (List.map
+                  (fun (a , b) ->
+                    match b with
+                    | None -> E.Text a
+                    | Some b -> Annotate (a , b))
+                  mecab_reading) @ result
+             in
              if String.starts_with_stdlib ~prefix:annot_reading mecab_reading_s
              then (* we're actually good here, just use annotations as is *)
-               inject rest parsing
-                 ((List.map (fun (a, b) -> E.Annotate (a, b)) annots) @ result)
-             else (* otherwise we prompt *)
-             let response = prompt annots mecab_reading in
-             match response with
-             | Keep ->
-               inject rest parsing
-                 ((List.map (fun (a, b) -> E.Annotate (a, b)) annots) @ result)
+               inject rest parsing (use_annotate ())
+             else
+               (* if its already in the dictionary, we just skip, even if the annotation is different *)
+               if List.exists (fun (s , _) -> String.equal annot_base s) !dictionary
+               then
+                 inject rest parsing (use_annotate ())
+               else
+               (* otherwise we prompt for reading conflict *)
+               let response = prompt annots mecab_reading in
+               match response with
+               | Keep dic ->
+                  let rest =
+                    if dic
+                    then
+                      let annots = List.map (fun (a , b) -> (a , Some b)) annots in
+                      let d = (annot_base , annots) in
+                      dictionary := d :: !dictionary;
+                      let rest = rewrite_annotate d rest in
+                      rest
+                    else rest
+                  in
+                  inject rest parsing (use_annotate ())
+               | Mecab dic ->
+                  let rest =
+                    if dic
+                    then
+                      let d = (mecab_reading_s , mecab_reading) in
+                      dictionary := d :: !dictionary;
+                      let rest = rewrite_annotate d rest in
+                      rest
+                    else rest
+                  in
+                  inject rest parsing (use_mecab ())
         in
         let (result , _) = inject content parsed [] in
-        let state = { state with last_line = Some content } in
-        result , state) state
+        let state =
+          { state with
+            last_line = Some content ;
+            dictionary = !dictionary ;
+          }
+        in result , state) state
       file
   in
   ()

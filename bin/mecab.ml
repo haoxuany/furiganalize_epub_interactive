@@ -74,10 +74,16 @@ let parse s =
                   then
                     rev_match rword ryomi (a :: leftover)
                   else
-                    [ ( Utf8.implode (List.rev allrword) ,
-                        Some (Utf8.implode (List.rev allryomi)) ) ;
-                      ( Utf8.implode leftover , None )
-                    ]
+                    let head = 
+                      ( Utf8.implode (List.rev allrword) ,
+                        Some (Utf8.implode (List.rev allryomi)) )
+                    in
+                    match leftover with
+                    | [] -> [ head ]
+                    | _ -> 
+                       [ head ;
+                         ( Utf8.implode leftover , None )
+                       ]
              in
              rev_match
                (List.rev (Utf8.explode word))

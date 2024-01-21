@@ -131,14 +131,23 @@ let from_file filename : infile =
   let file = Z.open_in filename in
   parse filename file
 
+type unicode_string =
+  string [@printer Format.pp_print_string]
+    [@@deriving show]
+
+type name =
+  M.name [@printer fun fmt (_ , b) -> Format.pp_print_string fmt b]
+    [@@deriving show]
+
 type content =
-  | Text of string
+  | Text of unicode_string
   (* this is pretty restrictive since we assume that we only care about ruby tags. *)
   (* in practice this is very much true. *)
-  | Annotate of string * string
+  | Annotate of unicode_string * unicode_string
   (* Any other tag should be preserved unless there's extremely good reason not to *)
   (* realistically probably some CSS class *)
-  | Tag of M.name * (M.name * string) list * content list
+  | Tag of name * (name * string) list * content list
+[@@deriving show]
 
 let show_plain_content (c : content list) =
   let rec show c result =
