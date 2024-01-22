@@ -24,6 +24,9 @@
    batteries
    camlzip
    markup
+   yojson
+   ppx_deriving_yojson
+   ppx_deriving
  )
  (tags
   (topics "to describe" your project)))

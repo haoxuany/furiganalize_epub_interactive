@@ -78,10 +78,25 @@ let () =
       ~description:"Annotate EPUB files with furigana"
       ()
   in
+  let
+    (* Why isn't this in the standard library lmao *)
+    module RequiredOpt = struct
+      let value_option meta f err =
+        Opt.value_option
+          meta
+          (Some None)
+          (fun v -> Some (f v))
+          err
+
+      let get opt s =
+        match Opt.get opt with
+        | None -> raise (Failure s)
+        | Some v -> v
+    end
+  in
   let pathopt =
-    Opt.value_option
+    RequiredOpt.value_option
       "PATH"
-      None
       E.from_file
       (fun exn v ->
         Printf.sprintf
@@ -163,7 +178,7 @@ let () =
     ()
   in
   let _ = P.parse_argv parser in
-  let file = Opt.get pathopt in
+  let file = RequiredOpt.get pathopt "Provide an input file with -i" in
   let module FS = (val (Opt.get splitteropt) : FS.SPLIT) in
   let splitter = FS.init () in
   let dictionary , push_write_entry =

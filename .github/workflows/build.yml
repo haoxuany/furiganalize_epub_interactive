@@ -1,0 +1,40 @@
+name: Build
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        ocaml-compiler:
+          - "5.1.0"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout tree
+        uses: actions/checkout@v4
+
+      - name: Set-up OCaml
+        uses: ocaml/setup-ocaml@v2
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+
+      - run: opam install . --deps-only --yes
+
+      - run: opam exec -- dune build
+
+      - run: mkdir release
+      - run: cp _build/default/bin/main.exe release/fei
+      - run: chmod +x release/fei
+      - run: cp LICENSE release/
+
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-fei
+          path: release

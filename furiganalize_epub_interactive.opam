@@ -17,6 +17,9 @@ depends: [
   "batteries"
   "camlzip"
   "markup"
+  "yojson"
+  "ppx_deriving_yojson"
+  "ppx_deriving"
   "odoc" {with-doc}
 ]
 build: [
