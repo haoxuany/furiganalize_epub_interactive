@@ -4,7 +4,6 @@
  (public_name fei)
  (name main)
  (libraries
-   furiganalize_epub_interactive
    batteries
    camlzip
    markup
